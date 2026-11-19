@@ -1,0 +1,533 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TrackP - Train Simulator</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;overflow:hidden;font-family:Arial;background:#87ceeb}
+#hud{
+ position:absolute;top:12px;left:12px;z-index:5;
+ color:white;background:#101827dd;padding:14px;
+ border-radius:12px;line-height:1.7
+}
+#help{
+ position:absolute;bottom:12px;left:50%;transform:translateX(-50%);
+ background:#101827dd;color:white;padding:12px 18px;
+ border-radius:12px;text-align:center;width:max-content;max-width:95%;
+ font-size:13px
+}
+#message{
+ position:absolute;top:20px;left:50%;transform:translateX(-50%);
+ color:white;background:#087b4b;padding:10px 18px;
+ border-radius:10px;display:none
+}
+button{
+ border:0;border-radius:8px;padding:9px 13px;
+ background:#e9a329;color:#111;font-weight:bold;cursor:pointer;
+ margin:3px
+}
+#controls{position:absolute;right:12px;bottom:85px;z-index:5}
+</style>
+</head>
+<body>
+
+<div id="hud">
+ <b>🚆 TrackP Simulator</b><br>
+ Mode: <span id="mode">Walking</span><br>
+ Speed: <span id="speed">0</span> km/h<br>
+ Passengers: <span id="count">0</span><br>
+ <button onclick="toggleTrain()">Enter / Exit Train (F)</button>
+ <button onclick="resetGame()">Restart</button>
+</div>
+
+<div id="message"></div>
+
+<div id="controls">
+ <button onclick="toggleDoor()">🚪 Doors</button>
+ <button onclick="horn()">📢 Horn</button>
+</div>
+
+<div id="help">
+ WASD = Move | F = Enter/Exit | W/S = Train Speed |
+ A/D = Turn Camera | Space = Brake | E = Passenger Action
+</div>
+
+<script type="importmap">
+{
+ "imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+ }
+}
+</script>
+
+<script type="module">
+import * as THREE from "three";
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x87ceeb);
+scene.fog=new THREE.Fog(0x87ceeb,100,400);
+
+const camera=new THREE.PerspectiveCamera(
+ 65,innerWidth/innerHeight,0.1,1000
+);
+
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth,innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xffffff,0x607060,2));
+
+const sun=new THREE.DirectionalLight(0xffffff,2);
+sun.position.set(-40,80,30);
+sun.castShadow=true;
+scene.add(sun);
+
+const mat=(color)=>new THREE.MeshStandardMaterial({color});
+
+const green=mat(0x439b48);
+const concrete=mat(0x888888);
+const railMat=mat(0x444b52);
+const wood=mat(0x704329);
+const white=mat(0xffffff);
+const black=mat(0x202020);
+
+// Ground
+const ground=new THREE.Mesh(
+ new THREE.PlaneGeometry(1000,1000),
+ green
+);
+ground.rotation.x=-Math.PI/2;
+ground.position.y=-0.1;
+ground.receiveShadow=true;
+scene.add(ground);
+
+// Track
+const sleepers=[];
+for(let z=-500;z<500;z+=3){
+ const s=new THREE.Mesh(
+  new THREE.BoxGeometry(3.2,0.2,0.5),wood
+ );
+ s.position.set(0,0.12,z);
+ s.receiveShadow=true;
+ scene.add(s);
+ sleepers.push(s);
+}
+
+for(const x of [-0.85,0.85]){
+ const rail=new THREE.Mesh(
+  new THREE.BoxGeometry(0.13,0.22,1000),railMat
+ );
+ rail.position.set(x,0.27,0);
+ scene.add(rail);
+}
+
+// Platform
+const platform=new THREE.Mesh(
+ new THREE.BoxGeometry(9,0.45,55),concrete
+);
+platform.position.set(6,0.2,0);
+scene.add(platform);
+
+const yellow=new THREE.Mesh(
+ new THREE.BoxGeometry(0.18,0.04,55),
+ mat(0xffcc00)
+);
+yellow.position.set(2.1,0.45,0);
+scene.add(yellow);
+
+// Station building
+function box(parent,w,h,d,color,x,y,z){
+ const o=new THREE.Mesh(
+  new THREE.BoxGeometry(w,h,d),mat(color)
+ );
+ o.position.set(x,y,z);
+ o.castShadow=true;
+ o.receiveShadow=true;
+ parent.add(o);
+ return o;
+}
+
+box(scene,14,5,8,0xe5dfce,12,2.5,-18);
+box(scene,15,0.35,9,0x343b50,12,5.1,-18);
+
+for(let i=0;i<3;i++){
+ box(scene,2,2.2,0.15,0x4385b9,8+i*4,2,-13.9);
+}
+
+// Station sign
+box(scene,0.3,4,0.3,0x333333,5,2,0);
+box(scene,0.3,4,0.3,0x333333,15,2,0);
+box(scene,10,1,0.4,0x153e6b,10,4,0);
+box(scene,8,0.55,0.1,0xffffff,10,4,0.22);
+
+// Trees
+function tree(x,z){
+ const g=new THREE.Group();
+ const trunk=new THREE.Mesh(
+  new THREE.CylinderGeometry(.25,.4,3,8),
+  mat(0x704020)
+ );
+ trunk.position.y=1.5;
+ g.add(trunk);
+
+ const leaves=new THREE.Mesh(
+  new THREE.SphereGeometry(2,10,8),
+  mat(0x176b31)
+ );
+ leaves.position.y=4;
+ g.add(leaves);
+ g.position.set(x,0,z);
+ scene.add(g);
+}
+for(let i=0;i<60;i++){
+ tree(
+  (i%2?1:-1)*(15+Math.random()*35),
+  -250+i*9
+ );
+}
+
+// Buildings
+for(let i=0;i<30;i++){
+ const side=i%2?1:-1;
+ const z=-220+i*15;
+ const h=5+Math.random()*12;
+ const b=box(
+  scene,7,h,8,
+  [0xd5b38b,0xb9c7d7,0xe0d2bf][i%3],
+  side*(23+Math.random()*15),h/2,z
+ );
+}
+
+// Human characters
+const people=[];
+const colors=[
+ 0x3155aa,0xaa3322,0xeeeeee,
+ 0x222222,0xc47b34,0x8c44aa,
+ 0x269b80,0xddaa22
+];
+
+function human(x,z,isPlayer=false){
+ const g=new THREE.Group();
+ const shirt=mat(
+  isPlayer?0x1266dd:colors[Math.floor(Math.random()*colors.length)]
+ );
+
+ const body=new THREE.Mesh(
+  new THREE.CapsuleGeometry(.35,.75,4,8),shirt
+ );
+ body.position.y=1.05;
+ body.castShadow=true;
+ g.add(body);
+
+ const head=new THREE.Mesh(
+  new THREE.SphereGeometry(.28,12,10),
+  mat(0xdca77f)
+ );
+ head.position.y=1.85;
+ g.add(head);
+
+ const legmat=mat(0x252a34);
+ for(const dx of [-.17,.17]){
+  const leg=new THREE.Mesh(
+   new THREE.BoxGeometry(.17,.65,.2),legmat
+  );
+  leg.position.set(dx,.38,0);
+  g.add(leg);
+ }
+
+ g.position.set(x,0,z);
+ scene.add(g);
+
+ const p={
+  group:g,
+  x,z,
+  targetX:x,
+  targetZ:z,
+  player:isPlayer,
+  boarded:false,
+  timer:Math.random()*5,
+  phase:Math.random()*6
+ };
+ people.push(p);
+ return p;
+}
+
+const player=human(7,5,true);
+
+// Generate many passengers
+for(let i=0;i<55;i++){
+ human(
+  3+Math.random()*5,
+  -25+Math.random()*50
+ );
+}
+
+// Benches
+for(let z of [-15,0,15]){
+ box(scene,3,.3,1,0x573a28,8,1,z);
+ for(let x of [7,9]){
+  box(scene,.2,1,.2,0x333333,x,.5,z);
+ }
+}
+
+// Train
+const train=new THREE.Group();
+scene.add(train);
+
+function makeCoach(z,isEngine=false){
+ const coach=new THREE.Group();
+
+ box(coach,3.5,1.8,9,
+  isEngine?0xd52c27:0x1765ad,
+  0,1.8,0
+ );
+
+ box(coach,3.5,.4,9,0x202d48,0,2.9,0);
+
+ // Windows
+ for(let side of [-1,1]){
+  for(let z1=-3.4;z1<=3.5;z1+=1.5){
+   box(coach,.08,.85,1,
+    0x8bd5ee,side*1.76,2.25,z1
+   );
+  }
+ }
+
+ // Wheels
+ for(let side of [-1,1]){
+  for(let z1 of [-3,3]){
+   const wheel=new THREE.Mesh(
+    new THREE.CylinderGeometry(.48,.48,.18,16),
+    black
+   );
+   wheel.rotation.z=Math.PI/2;
+   wheel.position.set(side*1.8,.55,z1);
+   coach.add(wheel);
+  }
+ }
+
+ if(isEngine){
+  box(coach,1.4,.7,1,0xffdd00,0,2.9,-4);
+ }
+
+ coach.position.z=z;
+ train.add(coach);
+ return coach;
+}
+
+makeCoach(0,true);
+makeCoach(10);
+makeCoach(20);
+makeCoach(30);
+
+train.position.set(0,0,-30);
+
+// Passenger seats inside train
+for(let z of [8,18,28]){
+ for(let x of [-.7,.7]){
+  box(train,.65,.5,1,0xdddddd,x,1.5,z);
+ }
+}
+
+// Game state
+let trainSpeed=0;
+let trainMode=false;
+let doorsOpen=true;
+let cameraAngle=0;
+let lastTime=0;
+let playerDirection=0;
+
+const keys={};
+
+addEventListener("keydown",e=>{
+ keys[e.key.toLowerCase()]=true;
+ if(e.key.toLowerCase()==="f")toggleTrain();
+ if(e.key.toLowerCase()==="e")passengerAction();
+ if(e.code==="Space")trainSpeed=0;
+});
+
+addEventListener("keyup",e=>{
+ keys[e.key.toLowerCase()]=false;
+});
+
+function say(t){
+ const el=document.getElementById("message");
+ el.innerText=t;
+ el.style.display="block";
+ setTimeout(()=>el.style.display="none",2300);
+}
+
+window.toggleTrain=function(){
+ if(!trainMode){
+  if(Math.abs(player.x-train.position.x)>5 ||
+     Math.abs(player.z-train.position.z)>35){
+   say("Train ke paas aaiye!");
+   return;
+  }
+  trainMode=true;
+  trainSpeed=0;
+  say("You entered the train!");
+ }else{
+  if(Math.abs(trainSpeed)>0.5){
+   say("Train rokne ke baad utariye!");
+   return;
+  }
+  trainMode=false;
+  player.x=5;
+  player.z=train.position.z+4;
+  player.group.position.set(player.x,0,player.z);
+  say("You exited the train!");
+ }
+};
+
+window.toggleDoor=function(){
+ doorsOpen=!doorsOpen;
+ say(doorsOpen?"Doors opened":"Doors closed");
+};
+
+window.horn=function(){
+ say("🚂 POOOOOOON!");
+};
+
+// Passenger boarding and exiting
+function passengerAction(){
+ if(trainMode){
+  say("Passenger action: Doors "+(doorsOpen?"OPEN":"CLOSED"));
+ }else{
+  say("Train ke paas jaakar F dabayein!");
+ }
+}
+
+function updatePassengers(dt){
+ for(const p of people){
+  if(p.player)continue;
+
+  p.timer-=dt;
+
+  if(p.timer<=0){
+   p.timer=4+Math.random()*7;
+   p.targetX=3+Math.random()*5;
+   p.targetZ=-24+Math.random()*48;
+  }
+
+  if(!p.boarded){
+   const dx=p.targetX-p.x;
+   const dz=p.targetZ-p.z;
+   const dist=Math.sqrt(dx*dx+dz*dz);
+
+   if(dist>.1){
+    const step=Math.min(dist,dt*.8);
+    p.x+=dx/dist*step;
+    p.z+=dz/dist*step;
+    p.group.rotation.y=Math.atan2(dx,dz);
+   }
+  }
+
+  p.group.position.set(p.x,0,p.z);
+
+  p.phase+=dt*5;
+  p.group.position.y=Math.abs(Math.sin(p.phase))*.04;
+ }
+}
+
+// Camera
+function updateCamera(dt){
+ let target;
+
+ if(trainMode){
+  target=new THREE.Vector3(
+   train.position.x+cameraAngle,
+   5,
+   train.position.z-11
+  );
+  camera.lookAt(
+   train.position.x,2,train.position.z+8
+  );
+ }else{
+  target=new THREE.Vector3(
+   player.x+cameraAngle,
+   5,
+   player.z-8
+  );
+  camera.lookAt(player.x,1,player.z+3);
+ }
+
+ camera.position.lerp(target,Math.min(1,dt*4));
+}
+
+// Main loop
+function animate(time){
+ requestAnimationFrame(animate);
+
+ const dt=Math.min((time-lastTime)/1000||0,.05);
+ lastTime=time;
+
+ if(trainMode){
+  if(keys.w)trainSpeed+=dt*12;
+  if(keys.s)trainSpeed-=dt*12;
+  if(keys[" "])trainSpeed*=.9;
+
+  trainSpeed=THREE.MathUtils.clamp(trainSpeed,-25,100);
+
+  train.position.z+=trainSpeed*dt*.5;
+ }else{
+  const forward=(keys.w?1:0)-(keys.s?1:0);
+  const side=(keys.d?1:0)-(keys.a?1:0);
+
+  player.z+=forward*dt*7;
+  player.x+=side*dt*7;
+
+  player.x=THREE.MathUtils.clamp(player.x,-10,15);
+  player.z=THREE.MathUtils.clamp(player.z,-490,490);
+
+  if(forward||side){
+   player.group.rotation.y=Math.atan2(side,forward);
+  }
+
+  player.group.position.set(player.x,0,player.z);
+ }
+
+ if(keys.q)cameraAngle-=dt*5;
+ if(keys.c)cameraAngle+=dt*5;
+
+ updatePassengers(dt);
+ updateCamera(dt);
+
+ document.getElementById("mode").innerText=
+  trainMode?"Driving":"Walking";
+
+ document.getElementById("speed").innerText=
+  Math.round(Math.abs(trainSpeed)*3.6);
+
+ document.getElementById("count").innerText=
+  people.filter(p=>!p.player).length;
+
+ renderer.render(scene,camera);
+}
+
+animate(0);
+
+window.resetGame=function(){
+ train.position.set(0,0,-30);
+ trainSpeed=0;
+ trainMode=false;
+ player.x=7;
+ player.z=5;
+ player.group.position.set(7,0,5);
+ say("Game restarted!");
+};
+
+addEventListener("resize",()=>{
+ camera.aspect=innerWidth/innerHeight;
+ camera.updateProjectionMatrix();
+ renderer.setSize(innerWidth,innerHeight);
+});
+</script>
+</body>
+</html>
